@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+JAR="$BASE_DIR/target/dbsearch-0.1.0.jar"
+LIBS="$BASE_DIR/target/lib/*"
+
+# Build if needed (safe to run repeatedly)
+if [[ ! -f "$JAR" ]]; then
+  mvn -q -f "$BASE_DIR/pom.xml" package
+fi
+
+exec java -cp "$JAR:$LIBS" com.dbsearch.DbSearch "$@"
+
