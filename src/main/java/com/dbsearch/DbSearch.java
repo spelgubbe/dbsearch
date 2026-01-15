@@ -57,9 +57,11 @@ public final class DbSearch {
 
 		try (ResultSet cols = md.getColumns (null, schema.isEmpty () ? null : schema, table, "%")) {
 		    while (cols.next ()) {
+			String nullability = getNullability (cols);
 			String col = cols.getString ("COLUMN_NAME");
 			String type = cols.getString ("TYPE_NAME");
-			colMap.put (col, type);
+			String fullTypeName = type + nullability;
+			colMap.put (col, fullTypeName);
 		    }
 		}
 
@@ -69,6 +71,15 @@ public final class DbSearch {
 
 	System.out.printf ("Loaded schema cache: %d schemas\n", result.size ());
 	return result;
+    }
+
+    private static String getNullability (ResultSet cols) throws SQLException {
+	int nullable = cols.getInt ("NULLABLE");
+	return switch (nullable) {
+	    case DatabaseMetaData.columnNoNulls -> "NOT NULL";
+	    case DatabaseMetaData.columnNullable -> "NULL";
+	    default -> ""; // unknown / not reported
+	};
     }
 
     /** Case-insensitive substring search across table and column names */
@@ -176,7 +187,6 @@ public final class DbSearch {
 	String cachePath = env.getProperty ("DBSEARCH_CACHE");
 
 	File cacheFile = getFile (cachePath);
-
 
 	Properties dbProps = new Properties ();
 	dbProps.put ("user", user);
