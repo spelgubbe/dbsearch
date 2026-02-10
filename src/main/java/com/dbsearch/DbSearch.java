@@ -60,7 +60,7 @@ public final class DbSearch {
 			String nullability = getNullability (cols);
 			String col = cols.getString ("COLUMN_NAME");
 			String type = cols.getString ("TYPE_NAME");
-			String fullTypeName = type + nullability;
+			String fullTypeName = type + " " + nullability;
 			colMap.put (col, fullTypeName);
 		    }
 		}
