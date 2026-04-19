@@ -192,11 +192,10 @@ public final class DbSearch {
 	dbProps.put ("user", user);
 	dbProps.put ("password", password);
 
-	Connection db = DriverManager.getConnection (dbUrl, dbProps);
-
 	String ownerNameFilter = args[0].trim ();
 
 	if (ownerNameFilter.equals ("load")) {
+	    Connection db = DriverManager.getConnection (dbUrl, dbProps);
 	    long start = System.currentTimeMillis ();
 	    var dbSpec = loadSchema (db);
 	    save (dbSpec, cacheFile);
