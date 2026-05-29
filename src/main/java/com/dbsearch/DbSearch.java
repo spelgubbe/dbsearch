@@ -14,6 +14,8 @@ public final class DbSearch {
 
     private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
+    enum Format { TABLE, COLUMN, FLAT }
+
     public static void save(Map<String, Map<String, Map<String, String>>> db, File cacheFile) throws IOException {
         try (ObjectOutputStream oos = new ObjectOutputStream(
                 new BufferedOutputStream(new FileOutputStream(cacheFile)))) {
@@ -106,64 +108,75 @@ public final class DbSearch {
     }
 
     public static void search(String ownerFilter, String tableFilter, String columnFilter, File cacheFile,
-            boolean verbose) throws IOException, ClassNotFoundException {
+            boolean verbose, Format format) throws IOException, ClassNotFoundException {
         var dbSpec = load(cacheFile);
         if (dbSpec == null) {
             System.out.println("No cache found. Run 'load' first or use --live.");
             return;
         }
         printCacheMeta(cacheFile, verbose);
-        searchInMemory(ownerFilter, tableFilter, columnFilter, dbSpec);
+        searchInMemory(ownerFilter, tableFilter, columnFilter, dbSpec, format);
     }
 
-    public static void searchLive(String ownerFilter, String tableFilter, String columnFilter, Connection db)
-            throws SQLException {
+    public static void searchLive(String ownerFilter, String tableFilter, String columnFilter, Connection db,
+            Format format) throws SQLException {
         // Uppercase to match Oracle's identifier storage; in-memory filter below is authoritative.
         String schemaJdbc = ownerFilter.isEmpty() ? "%" : "%" + ownerFilter.toUpperCase(Locale.ROOT) + "%";
         String tableJdbc  = tableFilter.isEmpty()  ? "%" : "%" + tableFilter.toUpperCase(Locale.ROOT) + "%";
-        searchInMemory(ownerFilter, tableFilter, columnFilter, loadSchema(db, schemaJdbc, tableJdbc));
+        searchInMemory(ownerFilter, tableFilter, columnFilter, loadSchema(db, schemaJdbc, tableJdbc), format);
     }
 
     private static void searchInMemory(String ownerFilter, String tableFilter, String columnFilter,
-            Map<String, Map<String, Map<String, String>>> dbSpec) {
+            Map<String, Map<String, Map<String, String>>> dbSpec, Format format) {
         final String ownerQ  = replaceNull(replaceWildcard(ownerFilter)).toLowerCase(Locale.ROOT);
         final String tableQ  = replaceNull(replaceWildcard(tableFilter)).toLowerCase(Locale.ROOT);
         final String columnQ = replaceNull(replaceWildcard(columnFilter)).toLowerCase(Locale.ROOT);
 
         dbSpec.forEach((schema, tableMap) -> {
-            if (schema.toLowerCase(Locale.ROOT).contains(ownerQ)) {
-                tableMap.forEach((tableName, columns) -> {
-                    if (tableName.toLowerCase(Locale.ROOT).contains(tableQ)) {
-                        for (String columnName : columns.keySet()) {
-                            if (columnName.toLowerCase(Locale.ROOT).contains(columnQ)) {
-                                printTable(schema, tableName, columns);
+            if (!schema.toLowerCase(Locale.ROOT).contains(ownerQ)) return;
+            tableMap.forEach((tableName, columns) -> {
+                if (!tableName.toLowerCase(Locale.ROOT).contains(tableQ)) return;
+                switch (format) {
+                    case TABLE -> {
+                        for (String col : columns.keySet()) {
+                            if (col.toLowerCase(Locale.ROOT).contains(columnQ)) {
+                                System.out.printf("%nTABLE %s.%s%n", schema, tableName);
+                                columns.forEach((c, t) -> System.out.printf(" - %s (%s)%n", c, t));
                                 break;
                             }
                         }
                     }
-                });
-            }
+                    case COLUMN -> {
+                        List<Map.Entry<String, String>> hits = columns.entrySet().stream()
+                                .filter(e -> e.getKey().toLowerCase(Locale.ROOT).contains(columnQ))
+                                .toList();
+                        if (!hits.isEmpty()) {
+                            System.out.printf("%nTABLE %s.%s%n", schema, tableName);
+                            hits.forEach(e -> System.out.printf(" - %s (%s)%n", e.getKey(), e.getValue()));
+                        }
+                    }
+                    case FLAT -> columns.forEach((col, type) -> {
+                        if (col.toLowerCase(Locale.ROOT).contains(columnQ))
+                            System.out.printf("%s.%s.%s %s%n", schema, tableName, col, type);
+                    });
+                }
+            });
         });
     }
 
     private static void searchAll(String ownerFilter, String tableFilter, String columnFilter,
-            Map<String, Map<String, String>> ini, boolean verbose) {
+            Map<String, Map<String, String>> ini, boolean verbose, Format format) {
         for (Map.Entry<String, Map<String, String>> entry : ini.entrySet()) {
             String name = entry.getKey();
             ConnConfig conn = fromIniSection(entry.getValue(), name);
             System.out.printf("%n[%s]%n", name);
             if (verbose) System.out.printf("  %s%n", conn.url());
             try (Connection db = conn.connect()) {
-                searchLive(ownerFilter, tableFilter, columnFilter, db);
+                searchLive(ownerFilter, tableFilter, columnFilter, db, format);
             } catch (SQLException e) {
                 System.err.printf("Failed to connect to '%s': %s%n", name, e.getMessage());
             }
         }
-    }
-
-    private static void printTable(String schema, String tableName, Map<String, String> columns) {
-        System.out.printf("%nTABLE %s.%s%n", schema, tableName);
-        columns.forEach((col, type) -> System.out.printf(" - %s (%s)%n", col, type));
     }
 
     /** Parses an INI file into section name -> (key -> value). */
@@ -260,7 +273,7 @@ public final class DbSearch {
     private static void printUsage() {
         System.out.println("Usage:");
         System.out.println("  dbsearch [--conn <name>] load");
-        System.out.println("  dbsearch [--conn <name> | --all] [-v] [--live] <owner> <table> <column>");
+        System.out.println("  dbsearch [--conn <name> | --all] [-v] [--live] [--format table|column|flat] <owner> <table> <column>");
         System.out.println("  dbsearch connections");
     }
 
@@ -268,19 +281,32 @@ public final class DbSearch {
         Map<String, Map<String, String>> ini = parseIni(repoRoot().resolve("connections.ini"));
 
         String connName = null;
-        boolean live = false;
+        boolean live    = false;
         boolean verbose = false;
-        boolean all = false;
-        int idx = 0;
-        while (idx < args.length && args[idx].startsWith("-")) {
+        boolean all     = false;
+        Format format   = Format.TABLE;
+        List<String> rest = new ArrayList<>();
+        for (int idx = 0; idx < args.length; idx++) {
             switch (args[idx]) {
                 case "--conn"          -> connName = args[++idx];
                 case "--live"          -> live = true;
                 case "--verbose", "-v" -> verbose = true;
                 case "--all"           -> all = true;
-                default -> { System.err.println("Unknown flag: " + args[idx]); printUsage(); System.exit(1); }
+                case "--format"        -> {
+                    try {
+                        format = Format.valueOf(args[++idx].toUpperCase(Locale.ROOT));
+                    } catch (IllegalArgumentException e) {
+                        System.err.println("Unknown format. Valid values: table, column, flat");
+                        System.exit(1);
+                    }
+                }
+                default -> {
+                    if (args[idx].startsWith("-")) {
+                        System.err.println("Unknown flag: " + args[idx]); printUsage(); System.exit(1);
+                    }
+                    rest.add(args[idx]);
+                }
             }
-            idx++;
         }
 
         if (all && connName != null) {
@@ -288,19 +314,17 @@ public final class DbSearch {
             System.exit(1);
         }
 
-        String[] rest = Arrays.copyOfRange(args, idx, args.length);
-
-        if (rest.length == 0) {
+        if (rest.isEmpty()) {
             printUsage();
             return;
         }
 
-        if (rest[0].equals("connections")) {
+        if (rest.get(0).equals("connections")) {
             listConnections(ini);
             return;
         }
 
-        if (rest[0].equals("load")) {
+        if (rest.get(0).equals("load")) {
             ConnConfig conn = resolveConnection(ini, connName);
             long start = System.currentTimeMillis();
             try (Connection db = conn.connect()) {
@@ -313,14 +337,14 @@ public final class DbSearch {
             return;
         }
 
-        if (rest.length < 3) {
+        if (rest.size() < 3) {
             printUsage();
             return;
         }
 
-        String ownerFilter  = rest[0].trim();
-        String tableFilter  = rest[1].trim();
-        String columnFilter = rest[2].trim();
+        String ownerFilter  = rest.get(0).trim();
+        String tableFilter  = rest.get(1).trim();
+        String columnFilter = rest.get(2).trim();
         System.out.println(ownerFilter);
         System.out.println(tableFilter);
         System.out.println(columnFilter);
@@ -330,12 +354,12 @@ public final class DbSearch {
                 System.err.println("No connections configured. Create connections.ini from connections.ini.example.");
                 System.exit(1);
             }
-            searchAll(ownerFilter, tableFilter, columnFilter, ini, verbose);
+            searchAll(ownerFilter, tableFilter, columnFilter, ini, verbose, format);
         } else if (live) {
             ConnConfig conn = resolveConnection(ini, connName);
             if (verbose) System.out.printf("[Live] %s%n", conn.url());
             try (Connection db = conn.connect()) {
-                searchLive(ownerFilter, tableFilter, columnFilter, db);
+                searchLive(ownerFilter, tableFilter, columnFilter, db, format);
             }
         } else {
             ConnConfig conn = resolveConnection(ini, connName);
@@ -344,7 +368,7 @@ public final class DbSearch {
                 System.out.printf("Cache not found: %s%nRun 'load' first or use --live.%n", cacheFile);
                 return;
             }
-            search(ownerFilter, tableFilter, columnFilter, cacheFile, verbose);
+            search(ownerFilter, tableFilter, columnFilter, cacheFile, verbose, format);
         }
     }
 }
