@@ -9,7 +9,6 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public final class DbSearch {
 
@@ -131,14 +130,12 @@ public final class DbSearch {
         final String tableQ  = replaceNull(replaceWildcard(tableFilter)).toLowerCase(Locale.ROOT);
         final String columnQ = replaceNull(replaceWildcard(columnFilter)).toLowerCase(Locale.ROOT);
 
-        AtomicInteger hitCount = new AtomicInteger(0);
         dbSpec.forEach((schema, tableMap) -> {
             if (schema.toLowerCase(Locale.ROOT).contains(ownerQ)) {
                 tableMap.forEach((tableName, columns) -> {
                     if (tableName.toLowerCase(Locale.ROOT).contains(tableQ)) {
                         for (String columnName : columns.keySet()) {
                             if (columnName.toLowerCase(Locale.ROOT).contains(columnQ)) {
-                                hitCount.incrementAndGet();
                                 printTable(schema, tableName, columns);
                                 break;
                             }
@@ -147,7 +144,21 @@ public final class DbSearch {
                 });
             }
         });
-        System.out.println("Found " + hitCount.get() + " matches.");
+    }
+
+    private static void searchAll(String ownerFilter, String tableFilter, String columnFilter,
+            Map<String, Map<String, String>> ini, boolean verbose) {
+        for (Map.Entry<String, Map<String, String>> entry : ini.entrySet()) {
+            String name = entry.getKey();
+            ConnConfig conn = fromIniSection(entry.getValue(), name);
+            System.out.printf("%n[%s]%n", name);
+            if (verbose) System.out.printf("  %s%n", conn.url());
+            try (Connection db = conn.connect()) {
+                searchLive(ownerFilter, tableFilter, columnFilter, db);
+            } catch (SQLException e) {
+                System.err.printf("Failed to connect to '%s': %s%n", name, e.getMessage());
+            }
+        }
     }
 
     private static void printTable(String schema, String tableName, Map<String, String> columns) {
@@ -249,7 +260,7 @@ public final class DbSearch {
     private static void printUsage() {
         System.out.println("Usage:");
         System.out.println("  dbsearch [--conn <name>] load");
-        System.out.println("  dbsearch [--conn <name>] [-v] [--live] <owner> <table> <column>");
+        System.out.println("  dbsearch [--conn <name> | --all] [-v] [--live] <owner> <table> <column>");
         System.out.println("  dbsearch connections");
     }
 
@@ -259,15 +270,22 @@ public final class DbSearch {
         String connName = null;
         boolean live = false;
         boolean verbose = false;
+        boolean all = false;
         int idx = 0;
         while (idx < args.length && args[idx].startsWith("-")) {
             switch (args[idx]) {
-                case "--conn" -> connName = args[++idx];
-                case "--live" -> live = true;
+                case "--conn"          -> connName = args[++idx];
+                case "--live"          -> live = true;
                 case "--verbose", "-v" -> verbose = true;
+                case "--all"           -> all = true;
                 default -> { System.err.println("Unknown flag: " + args[idx]); printUsage(); System.exit(1); }
             }
             idx++;
+        }
+
+        if (all && connName != null) {
+            System.err.println("--all and --conn are mutually exclusive.");
+            System.exit(1);
         }
 
         String[] rest = Arrays.copyOfRange(args, idx, args.length);
@@ -282,9 +300,8 @@ public final class DbSearch {
             return;
         }
 
-        ConnConfig conn = resolveConnection(ini, connName);
-
         if (rest[0].equals("load")) {
+            ConnConfig conn = resolveConnection(ini, connName);
             long start = System.currentTimeMillis();
             try (Connection db = conn.connect()) {
                 var dbSpec = loadSchema(db, "%", "%");
@@ -308,12 +325,20 @@ public final class DbSearch {
         System.out.println(tableFilter);
         System.out.println(columnFilter);
 
-        if (live) {
+        if (all) {
+            if (ini.isEmpty()) {
+                System.err.println("No connections configured. Create connections.ini from connections.ini.example.");
+                System.exit(1);
+            }
+            searchAll(ownerFilter, tableFilter, columnFilter, ini, verbose);
+        } else if (live) {
+            ConnConfig conn = resolveConnection(ini, connName);
             if (verbose) System.out.printf("[Live] %s%n", conn.url());
             try (Connection db = conn.connect()) {
                 searchLive(ownerFilter, tableFilter, columnFilter, db);
             }
         } else {
+            ConnConfig conn = resolveConnection(ini, connName);
             File cacheFile = new File(conn.cachePath());
             if (!cacheFile.exists()) {
                 System.out.printf("Cache not found: %s%nRun 'load' first or use --live.%n", cacheFile);
