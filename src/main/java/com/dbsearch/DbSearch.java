@@ -46,7 +46,8 @@ public final class DbSearch {
         }
     }
 
-    private static void printCacheMeta(File cacheFile) {
+    private static void printCacheMeta(File cacheFile, boolean verbose) {
+        if (!verbose) return;
         File mf = metaFile(cacheFile);
         if (!mf.exists()) return;
         try {
@@ -59,7 +60,9 @@ public final class DbSearch {
             String loaded = ts == 0 ? "unknown"
                     : LocalDateTime.ofInstant(Instant.ofEpochMilli(ts), ZoneId.systemDefault()).format(FMT);
             System.out.printf("[Cache] %s  loaded %s%n", url, loaded);
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            System.err.println("Warning: failed to read cache metadata:");
+            e.printStackTrace(System.err);
         }
     }
 
@@ -103,14 +106,14 @@ public final class DbSearch {
         };
     }
 
-    public static void search(String ownerFilter, String tableFilter, String columnFilter, File cacheFile)
-            throws IOException, ClassNotFoundException {
+    public static void search(String ownerFilter, String tableFilter, String columnFilter, File cacheFile,
+            boolean verbose) throws IOException, ClassNotFoundException {
         var dbSpec = load(cacheFile);
         if (dbSpec == null) {
             System.out.println("No cache found. Run 'load' first or use --live.");
             return;
         }
-        printCacheMeta(cacheFile);
+        printCacheMeta(cacheFile, verbose);
         searchInMemory(ownerFilter, tableFilter, columnFilter, dbSpec);
     }
 
@@ -246,7 +249,7 @@ public final class DbSearch {
     private static void printUsage() {
         System.out.println("Usage:");
         System.out.println("  dbsearch [--conn <name>] load");
-        System.out.println("  dbsearch [--conn <name>] [--live] <owner> <table> <column>");
+        System.out.println("  dbsearch [--conn <name>] [-v] [--live] <owner> <table> <column>");
         System.out.println("  dbsearch connections");
     }
 
@@ -255,11 +258,13 @@ public final class DbSearch {
 
         String connName = null;
         boolean live = false;
+        boolean verbose = false;
         int idx = 0;
-        while (idx < args.length && args[idx].startsWith("--")) {
+        while (idx < args.length && args[idx].startsWith("-")) {
             switch (args[idx]) {
                 case "--conn" -> connName = args[++idx];
                 case "--live" -> live = true;
+                case "--verbose", "-v" -> verbose = true;
                 default -> { System.err.println("Unknown flag: " + args[idx]); printUsage(); System.exit(1); }
             }
             idx++;
@@ -304,7 +309,7 @@ public final class DbSearch {
         System.out.println(columnFilter);
 
         if (live) {
-            System.out.printf("[Live] %s%n", conn.url());
+            if (verbose) System.out.printf("[Live] %s%n", conn.url());
             try (Connection db = conn.connect()) {
                 searchLive(ownerFilter, tableFilter, columnFilter, db);
             }
@@ -314,7 +319,7 @@ public final class DbSearch {
                 System.out.printf("Cache not found: %s%nRun 'load' first or use --live.%n", cacheFile);
                 return;
             }
-            search(ownerFilter, tableFilter, columnFilter, cacheFile);
+            search(ownerFilter, tableFilter, columnFilter, cacheFile, verbose);
         }
     }
 }
