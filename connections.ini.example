@@ -1,0 +1,21 @@
+# Copy to connections.ini and fill in your values.
+# Each [section] is a named connection. Use --conn <name> to select one.
+# The [default] section is used when no --conn flag is given.
+
+[default]
+url=jdbc:oracle:thin:@myhost:1521:mydb
+user=myuser
+password=secret
+cache=/home/dp/dbsearch/db.ser
+
+[dev]
+url=jdbc:postgresql://localhost:5432/devdb
+user=devuser
+password=secret
+cache=/home/dp/dbsearch/db.dev.ser
+
+[staging]
+url=jdbc:oracle:thin:@staginghost:1521:stagingdb
+user=staginguser
+password=secret
+cache=/home/dp/dbsearch/db.staging.ser

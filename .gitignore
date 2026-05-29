@@ -1,5 +1,9 @@
 .env
+connections.ini
 target/
 db.ser
+db.*.ser
+db.*.ser.meta
 libs/
 *.class
+.idea/
